@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import {
   ChevronLeft,
@@ -19,6 +20,7 @@ import { Skeleton } from "~/components/ui/skeleton";
 
 import { api, type RouterOutputs } from "~/trpc/react";
 import { useWeekViewStore } from "~/stores/useWeekViewStore";
+import { useUserNames } from "~/hooks/useUserNames";
 import {
   getWeekDates,
   formatDayShort,
@@ -35,11 +37,14 @@ function DayCell({
   date,
   meal,
   onClickMeal,
+  userNames,
 }: {
   date: Date;
   meal: MealPlan | undefined;
   onClickMeal: (meal: MealPlan) => void;
+  userNames: Record<string, string>;
 }) {
+  const displayName = (id: string) => userNames[id] ?? id.slice(0, 8);
   const dateStr = formatDateString(date);
   const { isOver, setNodeRef } = useDroppable({
     id: `day-${dateStr}`,
@@ -78,9 +83,17 @@ function DayCell({
       </div>
 
       {meal ? (
-        <button
+        <div
+          role="button"
+          tabIndex={0}
           className="flex-1 text-left space-y-1.5 group cursor-pointer"
           onClick={() => onClickMeal(meal)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              onClickMeal(meal);
+            }
+          }}
         >
           <p className="text-sm font-semibold group-hover:text-primary transition-colors truncate">
             {meal.recipe.name}
@@ -96,16 +109,16 @@ function DayCell({
                 <Tooltip>
                   <TooltipTrigger render={<Avatar className="h-5 w-5" />}>
                     <AvatarFallback className="text-[9px] bg-primary text-primary-foreground">
-                      {meal.ownerId.slice(0, 2).toUpperCase()}
+                      {displayName(meal.ownerId).slice(0, 2).toUpperCase()}
                     </AvatarFallback>
                   </TooltipTrigger>
-                  <TooltipContent>Owner</TooltipContent>
+                  <TooltipContent>{displayName(meal.ownerId)}</TooltipContent>
                 </Tooltip>
               </TooltipProvider>
             ) : (
               <TooltipProvider>
                 <Tooltip>
-                  <TooltipTrigger>
+                  <TooltipTrigger render={<span className="inline-flex" />}>
                     <AlertTriangle className="h-4 w-4 text-orange-500" />
                   </TooltipTrigger>
                   <TooltipContent>
@@ -119,7 +132,7 @@ function DayCell({
                 {meal.supportIds.slice(0, 3).map((id) => (
                   <Avatar key={id} className="h-4 w-4 border border-card">
                     <AvatarFallback className="text-[8px]">
-                      {id.slice(0, 2).toUpperCase()}
+                      {displayName(id).slice(0, 2).toUpperCase()}
                     </AvatarFallback>
                   </Avatar>
                 ))}
@@ -131,7 +144,7 @@ function DayCell({
               </div>
             )}
           </div>
-        </button>
+        </div>
       ) : (
         <div className="flex-1 flex items-center justify-center text-muted-foreground/50">
           <UtensilsCrossed className="h-5 w-5" />
@@ -159,6 +172,18 @@ export function WeeklyCalendar({
 
   const mealsByDate = new Map<string, MealPlan>();
   meals?.forEach((m) => mealsByDate.set(m.date, m));
+
+  // Collect all user IDs from this week's meals for name resolution
+  const allUserIds = useMemo(() => {
+    if (!meals) return [];
+    const ids: string[] = [];
+    for (const m of meals) {
+      if (m.ownerId) ids.push(m.ownerId);
+      if (m.supportIds) ids.push(...m.supportIds);
+    }
+    return ids;
+  }, [meals]);
+  const userNames = useUserNames(allUserIds);
 
   return (
     <div className="space-y-3">
@@ -200,6 +225,7 @@ export function WeeklyCalendar({
                 date={date}
                 meal={mealsByDate.get(dateStr)}
                 onClickMeal={onClickMeal}
+                userNames={userNames}
               />
             );
           })}

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { and, eq, gte, lte } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 
 import {
   createTRPCRouter,
@@ -10,16 +11,7 @@ import {
   weekTemplateMeals,
   weekTemplates,
 } from "~/server/db/schema";
-
-function getWeekRange(weekStartDate: string) {
-  const start = new Date(weekStartDate + "T00:00:00");
-  const end = new Date(start);
-  end.setDate(end.getDate() + 6);
-  return {
-    start: start.toISOString().split("T")[0]!,
-    end: end.toISOString().split("T")[0]!,
-  };
-}
+import { getWeekRange, formatDateStr } from "~/server/utils/dates";
 
 export const weekTemplateRouter = createTRPCRouter({
   create: protectedProcedure
@@ -95,7 +87,12 @@ export const weekTemplateRouter = createTRPCRouter({
         with: { meals: true },
       });
 
-      if (!template) throw new Error("Template not found");
+      if (!template) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Template not found",
+        });
+      }
 
       const { start, end } = getWeekRange(input.targetWeekStart);
 
@@ -113,7 +110,7 @@ export const weekTemplateRouter = createTRPCRouter({
             const targetDate = new Date(weekStart);
             targetDate.setDate(targetDate.getDate() + meal.dayOfWeek);
             return {
-              date: targetDate.toISOString().split("T")[0]!,
+              date: formatDateStr(targetDate),
               recipeId: meal.recipeId,
               servingScale: meal.servingScale,
             };

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Loader2, Trash2, ExternalLink, Users, Crown } from "lucide-react";
 import { toast } from "sonner";
 import { useUser } from "@clerk/nextjs";
@@ -37,6 +37,7 @@ import { Avatar, AvatarFallback } from "~/components/ui/avatar";
 
 import { api, type RouterOutputs } from "~/trpc/react";
 import { useWeekViewStore } from "~/stores/useWeekViewStore";
+import { useUserNames } from "~/hooks/useUserNames";
 
 type MealPlan = RouterOutputs["mealPlan"]["getWeek"][number];
 
@@ -61,6 +62,16 @@ export function MealDetailModal({
   const [ownerId, setOwnerId] = useState<string | null>(null);
   const [supportIds, setSupportIds] = useState<string[]>([]);
   const [showDelete, setShowDelete] = useState(false);
+
+  // Resolve all user IDs (owner + support) to display names
+  const allUserIds = useMemo(() => {
+    const ids: string[] = [];
+    if (ownerId) ids.push(ownerId);
+    ids.push(...supportIds);
+    return ids;
+  }, [ownerId, supportIds]);
+  const userNames = useUserNames(allUserIds);
+  const displayName = (id: string) => userNames[id] ?? id.slice(0, 12) + "...";
 
   useEffect(() => {
     if (meal) {
@@ -184,10 +195,10 @@ export function MealDetailModal({
                 <div className="flex items-center gap-2">
                   <Avatar className="h-6 w-6">
                     <AvatarFallback className="text-[10px] bg-primary text-primary-foreground">
-                      {ownerId.slice(0, 2).toUpperCase()}
+                      {displayName(ownerId).slice(0, 2).toUpperCase()}
                     </AvatarFallback>
                   </Avatar>
-                  <span className="text-sm">{ownerId.slice(0, 12)}...</span>
+                  <span className="text-sm">{displayName(ownerId)}</span>
                   <Button
                     variant="ghost"
                     size="sm"
@@ -226,10 +237,10 @@ export function MealDetailModal({
                     <div key={id} className="flex items-center gap-2">
                       <Avatar className="h-5 w-5">
                         <AvatarFallback className="text-[9px]">
-                          {id.slice(0, 2).toUpperCase()}
+                          {displayName(id).slice(0, 2).toUpperCase()}
                         </AvatarFallback>
                       </Avatar>
-                      <span className="text-sm">{id.slice(0, 12)}...</span>
+                      <span className="text-sm">{displayName(id)}</span>
                       <Button
                         variant="ghost"
                         size="sm"

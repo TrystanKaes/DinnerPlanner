@@ -10,7 +10,6 @@ export const metadata: Metadata = {
   title: "Family Dinner Planner",
   description:
     "Plan weekly family dinners, assign cooks, and generate shopping lists.",
-  icons: [{ rel: "icon", url: "/favicon.ico" }],
 };
 
 const quicksand = Quicksand({

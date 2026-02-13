@@ -6,19 +6,7 @@ import {
   protectedProcedure,
 } from "~/server/api/trpc";
 import { mealPlans } from "~/server/db/schema";
-
-/**
- * Get a date range (Sunday–Saturday) for a given week start date.
- */
-function getWeekRange(weekStartDate: string) {
-  const start = new Date(weekStartDate + "T00:00:00");
-  const end = new Date(start);
-  end.setDate(end.getDate() + 6);
-  return {
-    start: start.toISOString().split("T")[0]!,
-    end: end.toISOString().split("T")[0]!,
-  };
-}
+import { getWeekRange, formatDateStr } from "~/server/utils/dates";
 
 export const mealPlanRouter = createTRPCRouter({
   create: protectedProcedure
@@ -163,7 +151,7 @@ export const mealPlanRouter = createTRPCRouter({
             newDate.setDate(newDate.getDate() + dayOffset);
 
             return {
-              date: newDate.toISOString().split("T")[0]!,
+              date: formatDateStr(newDate),
               recipeId: meal.recipeId,
               servingScale: meal.servingScale,
               ownerId: meal.ownerId,

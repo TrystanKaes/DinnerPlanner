@@ -1,11 +1,13 @@
 import { z } from "zod";
-import { and, asc, desc, eq, gte, ilike, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, isNull, sql, count, max } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 
 import {
   createTRPCRouter,
   protectedProcedure,
 } from "~/server/api/trpc";
 import { ingredients, mealPlans, recipes } from "~/server/db/schema";
+import { formatDateStr } from "~/server/utils/dates";
 
 const ingredientSchema = z.object({
   amount: z.string(),
@@ -105,7 +107,7 @@ export const recipeRouter = createTRPCRouter({
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       // Check if recipe is in any upcoming meal plans
-      const today = new Date().toISOString().split("T")[0]!;
+      const today = formatDateStr(new Date());
       const upcomingMeals = await ctx.db
         .select()
         .from(mealPlans)
@@ -117,9 +119,11 @@ export const recipeRouter = createTRPCRouter({
         );
 
       if (upcomingMeals.length > 0) {
-        throw new Error(
-          "Cannot delete — this recipe is assigned to upcoming meals. Remove it from meal plans first.",
-        );
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            "Cannot delete — this recipe is assigned to upcoming meals. Remove it from meal plans first.",
+        });
       }
 
       // Soft delete
@@ -136,7 +140,7 @@ export const recipeRouter = createTRPCRouter({
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       const recipe = await ctx.db.query.recipes.findFirst({
-        where: eq(recipes.id, input.id),
+        where: and(eq(recipes.id, input.id), isNull(recipes.deletedAt)),
         with: {
           ingredients: {
             orderBy: [asc(ingredients.sortOrder)],
@@ -185,27 +189,108 @@ export const recipeRouter = createTRPCRouter({
         );
       }
 
-      // Build ordering
+      // Tag filtering at the DB level using array overlap
+      if (input.tags && input.tags.length > 0) {
+        conditions.push(
+          sql`${recipes.tags} && ARRAY[${sql.join(
+            input.tags.map((tag) => sql`${tag}`),
+            sql`, `,
+          )}]::text[]`,
+        );
+      }
+
+      const where = conditions.length > 1 ? and(...conditions) : conditions[0];
+
+      // For usage-based sorts, we need to join with meal_plans
+      const needsUsageData = [
+        "mostRecentlyUsed",
+        "leastRecentlyUsed",
+        "mostFrequentlyUsed",
+        "mostUnderused",
+      ].includes(input.sort);
+
+      if (needsUsageData) {
+        // Query with usage aggregation from meal_plans
+        const usageSubquery = ctx.db
+          .select({
+            recipeId: mealPlans.recipeId,
+            lastUsed: max(mealPlans.date).as("last_used"),
+            useCount: count(mealPlans.id).as("use_count"),
+          })
+          .from(mealPlans)
+          .groupBy(mealPlans.recipeId)
+          .as("usage");
+
+        let orderByClause;
+        switch (input.sort) {
+          case "mostRecentlyUsed":
+            orderByClause = sql`${usageSubquery.lastUsed} DESC NULLS LAST`;
+            break;
+          case "leastRecentlyUsed":
+            orderByClause = sql`${usageSubquery.lastUsed} ASC NULLS FIRST`;
+            break;
+          case "mostFrequentlyUsed":
+            orderByClause = sql`${usageSubquery.useCount} DESC NULLS LAST`;
+            break;
+          case "mostUnderused":
+            orderByClause = sql`${usageSubquery.useCount} ASC NULLS FIRST`;
+            break;
+          default:
+            orderByClause = sql`${recipes.createdAt} DESC`;
+        }
+
+        const rows = await ctx.db
+          .select({ id: recipes.id })
+          .from(recipes)
+          .leftJoin(usageSubquery, eq(recipes.id, usageSubquery.recipeId))
+          .where(where)
+          .orderBy(orderByClause)
+          .limit(input.limit)
+          .offset(input.cursor);
+
+        const recipeIds = rows.map((r) => r.id);
+
+        if (recipeIds.length === 0) {
+          return { items: [], nextCursor: undefined };
+        }
+
+        // Fetch full recipe data for the sorted IDs
+        const items = await ctx.db.query.recipes.findMany({
+          where: sql`${recipes.id} IN (${sql.join(
+            recipeIds.map((id) => sql`${id}`),
+            sql`, `,
+          )})`,
+          with: {
+            ingredients: {
+              orderBy: [asc(ingredients.sortOrder)],
+            },
+          },
+        });
+
+        // Preserve the sort order from the aggregated query
+        const idOrder = new Map(recipeIds.map((id, i) => [id, i]));
+        items.sort((a, b) => (idOrder.get(a.id) ?? 0) - (idOrder.get(b.id) ?? 0));
+
+        return {
+          items,
+          nextCursor:
+            rows.length === input.limit
+              ? input.cursor + input.limit
+              : undefined,
+        };
+      }
+
+      // Simple sorts (no usage data needed)
       let orderBy;
       switch (input.sort) {
         case "alphabetical":
           orderBy = [asc(recipes.name)];
           break;
         case "newestCreated":
-          orderBy = [desc(recipes.createdAt)];
-          break;
-        case "mostRecentlyUsed":
-          // Subquery for last used date
-          orderBy = [desc(recipes.updatedAt)]; // Simplified; full impl below
-          break;
-        case "leastRecentlyUsed":
-          orderBy = [asc(recipes.updatedAt)];
-          break;
         default:
           orderBy = [desc(recipes.createdAt)];
+          break;
       }
-
-      const where = conditions.length > 1 ? and(...conditions) : conditions[0];
 
       const items = await ctx.db.query.recipes.findMany({
         where,
@@ -219,16 +304,8 @@ export const recipeRouter = createTRPCRouter({
         },
       });
 
-      // Filter by tags in application layer (Drizzle array contains is tricky)
-      let filtered = items;
-      if (input.tags && input.tags.length > 0) {
-        filtered = items.filter((recipe) =>
-          input.tags!.some((tag) => recipe.tags?.includes(tag)),
-        );
-      }
-
       return {
-        items: filtered,
+        items,
         nextCursor:
           items.length === input.limit
             ? input.cursor + input.limit

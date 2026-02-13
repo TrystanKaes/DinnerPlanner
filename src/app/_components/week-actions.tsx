@@ -108,6 +108,7 @@ export function WeekActions() {
     api.shoppingList.generate.useMutation({
       onSuccess: () => {
         toast.success("Shopping list generated!");
+        void utils.shoppingList.getByWeek.invalidate({ weekStartDate });
       },
       onError: (e) => toast.error(e.message),
     });

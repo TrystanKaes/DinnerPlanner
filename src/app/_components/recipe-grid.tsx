@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   Search,
   SlidersHorizontal,
@@ -82,14 +82,16 @@ function DraggableRecipeCard({
     <Card
       ref={setNodeRef}
       style={style}
-      className="group relative cursor-grab active:cursor-grabbing transition-shadow hover:shadow-md"
+      className="group relative cursor-pointer transition-shadow hover:shadow-md"
+      onClick={() => onEdit()}
     >
       <CardContent className="p-3">
         <div className="flex items-start gap-2">
           <div
             {...listeners}
             {...attributes}
-            className="mt-1 shrink-0 text-muted-foreground hover:text-foreground"
+            className="mt-1 shrink-0 text-muted-foreground hover:text-foreground cursor-grab active:cursor-grabbing"
+            onClick={(e) => e.stopPropagation()}
           >
             <GripVertical className="h-4 w-4" />
           </div>
@@ -184,6 +186,13 @@ export function RecipeGrid() {
     setComplexityRange,
   } = useRecipeFilterStore();
 
+  // Debounce search input — only trigger API query after 300ms of no typing
+  const [debouncedSearch, setDebouncedSearch] = useState(search);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
   const [showFilters, setShowFilters] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [editRecipe, setEditRecipe] = useState<Recipe | null>(null);
@@ -201,7 +210,7 @@ export function RecipeGrid() {
 
   const utils = api.useUtils();
   const { data, isLoading } = api.recipe.list.useQuery({
-    search: search || undefined,
+    search: debouncedSearch || undefined,
     tags: selectedTags.length > 0 ? selectedTags : undefined,
     complexityMin: complexityMin > 1 ? complexityMin : undefined,
     complexityMax: complexityMax < 5 ? complexityMax : undefined,

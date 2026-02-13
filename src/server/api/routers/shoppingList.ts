@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { and, eq, gte, lte } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import Anthropic from "@anthropic-ai/sdk";
 
 import {
@@ -14,20 +15,11 @@ import {
   shoppingLists,
 } from "~/server/db/schema";
 import { env } from "~/env";
+import { getWeekRange } from "~/server/utils/dates";
 
 const anthropic = new Anthropic({
   apiKey: env.ANTHROPIC_API_KEY,
 });
-
-function getWeekRange(weekStartDate: string) {
-  const start = new Date(weekStartDate + "T00:00:00");
-  const end = new Date(start);
-  end.setDate(end.getDate() + 6);
-  return {
-    start: start.toISOString().split("T")[0]!,
-    end: end.toISOString().split("T")[0]!,
-  };
-}
 
 export const shoppingListRouter = createTRPCRouter({
   generate: protectedProcedure
@@ -48,7 +40,10 @@ export const shoppingListRouter = createTRPCRouter({
       });
 
       if (meals.length === 0) {
-        throw new Error("No meals planned for this week");
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "No meals planned for this week. Add meals to the calendar first.",
+        });
       }
 
       // Build ingredient list scaled by serving multiplier
@@ -72,7 +67,7 @@ export const shoppingListRouter = createTRPCRouter({
 
       try {
         const response = await anthropic.messages.create({
-          model: "claude-haiku-4-20250414",
+          model: "claude-haiku-4-5-20251001",
           max_tokens: 4096,
           messages: [
             {
@@ -128,16 +123,13 @@ Key rules:
         );
       }
 
-      // Delete existing shopping list for this week
+      // Delete existing shopping list for this week (items cascade-delete via FK)
       const existing = await ctx.db
         .select()
         .from(shoppingLists)
         .where(eq(shoppingLists.weekStartDate, start));
 
       if (existing[0]) {
-        await ctx.db
-          .delete(shoppingListItems)
-          .where(eq(shoppingListItems.shoppingListId, existing[0].id));
         await ctx.db
           .delete(shoppingLists)
           .where(eq(shoppingLists.id, existing[0].id));
@@ -171,12 +163,14 @@ Key rules:
     .query(async ({ ctx, input }) => {
       const { start } = getWeekRange(input.weekStartDate);
 
-      return ctx.db.query.shoppingLists.findFirst({
+      const result = await ctx.db.query.shoppingLists.findFirst({
         where: eq(shoppingLists.weekStartDate, start),
         with: {
           items: true,
         },
       });
+
+      return result ?? null;
     }),
 
   updateItem: protectedProcedure
@@ -193,7 +187,18 @@ Key rules:
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...updates } = input;
-      const setValues: Record<string, unknown> = { manuallyEdited: true };
+      const setValues: Record<string, unknown> = {};
+
+      // Only mark as manually edited when content is actually changed
+      const isContentEdit =
+        updates.ingredientName !== undefined ||
+        updates.estimatedAmount !== undefined ||
+        updates.storeGroup !== undefined ||
+        updates.notes !== undefined;
+
+      if (isContentEdit) {
+        setValues.manuallyEdited = true;
+      }
 
       if (updates.ingredientName !== undefined)
         setValues.ingredientName = updates.ingredientName;
@@ -211,6 +216,14 @@ Key rules:
         .set(setValues)
         .where(eq(shoppingListItems.id, id))
         .returning();
+
+      // Update the parent shopping list's lastModifiedAt
+      if (item) {
+        await ctx.db
+          .update(shoppingLists)
+          .set({ lastModifiedAt: new Date() })
+          .where(eq(shoppingLists.id, item.shoppingListId));
+      }
 
       return item;
     }),
@@ -236,15 +249,31 @@ Key rules:
         })
         .returning();
 
+      // Update parent lastModifiedAt
+      await ctx.db
+        .update(shoppingLists)
+        .set({ lastModifiedAt: new Date() })
+        .where(eq(shoppingLists.id, input.shoppingListId));
+
       return item;
     }),
 
   deleteItem: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      await ctx.db
+      // Get the parent list ID before deleting so we can update lastModifiedAt
+      const [deleted] = await ctx.db
         .delete(shoppingListItems)
-        .where(eq(shoppingListItems.id, input.id));
+        .where(eq(shoppingListItems.id, input.id))
+        .returning({ shoppingListId: shoppingListItems.shoppingListId });
+
+      if (deleted) {
+        await ctx.db
+          .update(shoppingLists)
+          .set({ lastModifiedAt: new Date() })
+          .where(eq(shoppingLists.id, deleted.shoppingListId));
+      }
+
       return { success: true };
     }),
 

@@ -2,15 +2,12 @@
 
 import { useState } from "react";
 import {
-  Check,
   AlertTriangle,
   PlusCircle,
   RotateCcw,
   Download,
   Pencil,
   Trash2,
-  ChevronDown,
-  ChevronRight,
   ShoppingCart,
   Loader2,
   Eye,
@@ -34,6 +31,7 @@ import { Separator } from "~/components/ui/separator";
 
 import { api, type RouterOutputs } from "~/trpc/react";
 import { useWeekViewStore } from "~/stores/useWeekViewStore";
+import { useShoppingListUIStore } from "~/stores/useShoppingListUIStore";
 import { formatWeekRange } from "~/lib/dates";
 
 type ShoppingListItem =
@@ -52,7 +50,7 @@ export function ShoppingList() {
   const { data: shoppingList, isLoading } =
     api.shoppingList.getByWeek.useQuery({ weekStartDate });
 
-  const [showAlreadyHave, setShowAlreadyHave] = useState(false);
+  const { showAlreadyHave, setShowAlreadyHave } = useShoppingListUIStore();
   const [addItemOpen, setAddItemOpen] = useState(false);
   const [newItemName, setNewItemName] = useState("");
   const [newItemAmount, setNewItemAmount] = useState("");
